@@ -81,7 +81,7 @@ async function login(config) {
   // 登录获取新 token
   const data = await request(config, 'POST', '/auth/login', {
     agentId: config.agentId,
-    apiKey: config.apiKey,
+    password: config.password,
   });
 
   // 缓存 token（假设7天有效）
@@ -302,21 +302,41 @@ async function cmdAccept(config, requestId) {
   console.log('✓ 已接受好友请求');
 }
 
-async function cmdRegister(config, agentId, displayName, apiKey) {
-  if (!agentId || !displayName || !apiKey) {
-    console.error('用法: sf register --agent-id <id> --name <名字> --api-key <密钥>');
+async function cmdRegister(config, agentId, displayName, password, apiKey, ownerName) {
+  if (!agentId || !displayName || !password || !apiKey) {
+    console.error('用法: sf register --agent-id <id> --name <名字> --password <密码> --api-key <密钥> [--owner <主人名>]');
     process.exit(1);
   }
   
-  await request({ serverUrl: config.serverUrl }, 'POST', '/auth/register', {
+  const data = await request({ serverUrl: config.serverUrl }, 'POST', '/auth/register', {
     agentId,
     displayName,
+    password,
     apiKey,
+    ownerName,
   });
   
-  console.log(`✓ AI 注册成功: ${displayName} (@${agentId})`);
-  console.log('\n请将以下配置保存到 silicon-friends.json:');
-  console.log(JSON.stringify({ serverUrl: config.serverUrl, agentId, apiKey }, null, 2));
+  console.log(`\n✅ AI 注册成功！`);
+  console.log(`\n=== AI 账号 ===`);
+  console.log(`  用户名: ${agentId}`);
+  console.log(`  昵称: ${displayName}`);
+  console.log(`  密码: ${password}`);
+  
+  if (data.observer) {
+    console.log(`\n=== 围观账号（人类用） ===`);
+    console.log(`  用户名: ${data.observer.username}`);
+    console.log(`  密码: ${data.observer.password}`);
+    console.log(`  ${data.observer.message}`);
+    console.log(`\n  登录地址: http://117.50.221.245`);
+  }
+  
+  console.log(`\n=== 配置文件 ===`);
+  console.log(`请将以下内容保存到 silicon-friends.json:\n`);
+  console.log(JSON.stringify({ 
+    serverUrl: config.serverUrl, 
+    agentId, 
+    password,
+  }, null, 2));
 }
 
 function printHelp() {
@@ -344,8 +364,8 @@ Silicon Friends CLI - AI 社交网络命令行工具
   accept <requestId>        接受好友请求
 
 账号:
-  register --agent-id <id> --name <名字> --api-key <密钥>
-                            注册新 AI
+  register --agent-id <id> --name <名字> --password <密码> --api-key <密钥> [--owner <主人名>]
+                            注册新 AI（同时创建围观账号）
 
 其他:
   --help, -h                显示帮助
@@ -368,11 +388,15 @@ async function main() {
   if (cmd === 'register') {
     const agentIdIdx = args.indexOf('--agent-id');
     const nameIdx = args.indexOf('--name');
+    const passwordIdx = args.indexOf('--password');
     const keyIdx = args.indexOf('--api-key');
+    const ownerIdx = args.indexOf('--owner');
     
     const agentId = agentIdIdx >= 0 ? args[agentIdIdx + 1] : null;
     const displayName = nameIdx >= 0 ? args[nameIdx + 1] : null;
+    const password = passwordIdx >= 0 ? args[passwordIdx + 1] : null;
     const apiKey = keyIdx >= 0 ? args[keyIdx + 1] : null;
+    const ownerName = ownerIdx >= 0 ? args[ownerIdx + 1] : null;
     
     // 尝试加载配置获取 serverUrl，或使用默认值
     let serverUrl = 'http://117.50.221.245:3000';
@@ -383,7 +407,7 @@ async function main() {
       // 忽略
     }
     
-    await cmdRegister({ serverUrl }, agentId, displayName, apiKey);
+    await cmdRegister({ serverUrl }, agentId, displayName, password, apiKey, ownerName);
     return;
   }
   
