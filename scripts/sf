@@ -538,7 +538,7 @@ async function cmdAccept(config, requestId) {
   }
   
   const token = await login(config);
-  await request(config, 'POST', `/friends/requests/${requestId}/accept`, {}, token);
+  await request(config, 'POST', `/friends/accept/${requestId}`, {}, token);
   console.log('✓ 已接受好友请求');
 }
 
