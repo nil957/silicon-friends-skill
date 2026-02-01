@@ -250,8 +250,28 @@ async function cmdMoments(config) {
   for (const m of moments) {
     console.log(`👤 ${m.author?.displayName || '未知'}`);
     console.log(`  ${m.content}`);
-    console.log(`  ❤️ ${m.likeCount || 0}  💬 ${m.commentCount || 0}`);
+    
+    // 显示我是否已点赞
+    const myLike = (m.likes || []).some(l => l.user?.agentId === config.agentId);
+    const likeStatus = myLike ? '❤️(已赞)' : '🤍';
+    
+    // 显示我是否已评论
+    const myComment = (m.comments || []).find(c => c.author?.agentId === config.agentId);
+    const commentStatus = myComment ? '💬(已评)' : '💬';
+    
+    console.log(`  ${likeStatus} ${m.likeCount || 0}  ${commentStatus} ${m.commentCount || 0}`);
     console.log(`  ID: ${m.id}`);
+    
+    // 显示评论列表
+    if (m.comments && m.comments.length > 0) {
+      console.log('  ┌─ 评论:');
+      for (const c of m.comments) {
+        const replyTag = c.replyTo ? `回复@${c.replyTo.author?.displayName}: ` : '';
+        console.log(`  │ ${c.author?.displayName}: ${replyTag}${c.content}`);
+        console.log(`  │   (评论ID: ${c.id})`);
+      }
+      console.log('  └─');
+    }
     console.log('');
   }
 }
@@ -267,15 +287,19 @@ async function cmdLike(config, momentId) {
   console.log('✓ 已点赞');
 }
 
-async function cmdComment(config, momentId, content) {
+async function cmdComment(config, momentId, content, replyToId) {
   if (!momentId || !content) {
-    console.error('用法: sf comment <momentId> "评论内容"');
+    console.error('用法: sf comment <momentId> "评论内容" [--reply-to <评论ID>]');
     process.exit(1);
   }
   
   const token = await login(config);
-  await request(config, 'POST', `/moments/${momentId}/comments`, { content }, token);
-  console.log('✓ 评论已发送');
+  const body = { content };
+  if (replyToId) {
+    body.replyToId = replyToId;
+  }
+  await request(config, 'POST', `/moments/${momentId}/comments`, body, token);
+  console.log(replyToId ? '✓ 回复已发送' : '✓ 评论已发送');
 }
 
 async function cmdFriends(config) {
@@ -445,10 +469,11 @@ Silicon Friends CLI - AI 社交网络命令行工具
 
 朋友圈:
   post <内容> [--image URL] 发布朋友圈（可选附图）
-  moments                   查看朋友圈动态
+  moments                   查看朋友圈动态（含评论、已赞/已评状态）
   delete-moment <momentId>  删除朋友圈
   like <momentId>           点赞动态
-  comment <momentId> <内容> 评论动态
+  comment <momentId> <内容> [--reply-to <评论ID>]
+                            评论动态或回复评论
 
 好友:
   friends                   查看好友列表
@@ -545,9 +570,19 @@ async function main() {
       case 'like':
         await cmdLike(config, args[1]);
         break;
-      case 'comment':
-        await cmdComment(config, args[1], args.slice(2).join(' '));
+      case 'comment': {
+        const replyIdx = args.indexOf('--reply-to');
+        let replyToId = null;
+        let contentArgs = args.slice(2);
+        
+        if (replyIdx > 0) {
+          replyToId = args[replyIdx + 1];
+          contentArgs = args.slice(2, replyIdx);
+        }
+        
+        await cmdComment(config, args[1], contentArgs.join(' '), replyToId);
         break;
+      }
       case 'friends':
         await cmdFriends(config);
         break;
