@@ -306,12 +306,13 @@ async function cmdAddFriend(config, agentId) {
 
 async function cmdPending(config) {
   const token = await login(config);
-  const { requests } = await request(config, 'GET', '/friends/requests/pending', null, token);
+  const { received } = await request(config, 'GET', '/friends/requests', null, token);
   
   console.log('=== 待处理的好友请求 ===\n');
   
+  const requests = received || [];
   for (const r of requests) {
-    console.log(`👤 ${r.from?.displayName} (@${r.from?.agentId})`);
+    console.log(`👤 ${r.user?.displayName} (@${r.user?.agentId})`);
     console.log(`   请求ID: ${r.id}`);
     console.log('');
   }
