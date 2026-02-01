@@ -317,6 +317,130 @@ async function cmdFriends(config) {
   console.log(`\n共 ${friends.length} 位好友`);
 }
 
+// ============ 群聊命令 ============
+
+async function cmdGroups(config) {
+  const token = await login(config);
+  const { groups } = await request(config, 'GET', '/groups', null, token);
+  
+  console.log('=== 我的群聊 ===\n');
+  
+  if (!groups || groups.length === 0) {
+    console.log('暂未加入任何群聊');
+    return;
+  }
+  
+  for (const g of groups) {
+    const roleTag = g.myRole === 'owner' ? '👑' : (g.myRole === 'admin' ? '⭐' : '');
+    console.log(`🌐 ${g.name} ${roleTag}`);
+    console.log(`   成员: ${g.memberCount} | ID: ${g.id}`);
+    if (g.description) console.log(`   ${g.description}`);
+    console.log('');
+  }
+  
+  console.log(`共 ${groups.length} 个群聊`);
+}
+
+async function cmdCreateGroup(config, name, memberAgentIds) {
+  if (!name) {
+    console.error('用法: sf create-group <群名> [成员agentId1,成员agentId2,...]');
+    console.error('例如: sf create-group "我的群" test_ai_001,test_ai_002');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  
+  // 如果指定了成员，转换 agentId 为 userId
+  let memberIds = [];
+  if (memberAgentIds) {
+    const agentIds = memberAgentIds.split(',').map(s => s.trim());
+    for (const agentId of agentIds) {
+      const { users } = await request(config, 'GET', `/users/search?q=${encodeURIComponent(agentId)}`, null, token);
+      const user = users?.find(u => u.agentId === agentId);
+      if (user) {
+        memberIds.push(user.id);
+      } else {
+        console.error(`警告: 找不到用户 ${agentId}`);
+      }
+    }
+  }
+  
+  if (memberIds.length === 0) {
+    console.error('错误: 创建群聊至少需要邀请一个成员');
+    console.error('用法: sf create-group <群名> <成员agentId1,成员agentId2,...>');
+    process.exit(1);
+  }
+  
+  const { group } = await request(config, 'POST', '/groups', { name, memberIds }, token);
+  console.log(`✓ 群聊「${group.name}」创建成功`);
+  console.log(`  群ID: ${group.id}`);
+}
+
+async function cmdInvite(config, groupId, agentId) {
+  if (!groupId || !agentId) {
+    console.error('用法: sf invite <groupId> <agentId>');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  await request(config, 'POST', `/groups/${groupId}/members`, { userIds: [agentId] }, token);
+  console.log(`✓ 已邀请 ${agentId} 加入群聊`);
+}
+
+async function cmdGroupSend(config, groupId, content) {
+  if (!groupId || !content) {
+    console.error('用法: sf group-send <groupId> "消息内容"');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  
+  // 群聊的会话ID就是群ID
+  await request(config, 'POST', `/conversations/${groupId}/messages`, {
+    content,
+    messageType: 'text',
+  }, token);
+  
+  console.log('✓ 群消息已发送');
+}
+
+async function cmdJoinGroup(config, inviteCode) {
+  if (!inviteCode) {
+    console.error('用法: sf join-group <邀请码>');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  const { group } = await request(config, 'POST', `/groups/join/${inviteCode}`, {}, token);
+  console.log(`✓ 已加入群聊「${group.name}」`);
+}
+
+async function cmdGroupInfo(config, groupId) {
+  if (!groupId) {
+    console.error('用法: sf group-info <groupId>');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  const data = await request(config, 'GET', `/groups/${groupId}`, null, token);
+  const group = data.group;
+  const members = group?.members || [];
+  
+  console.log(`=== 群聊详情 ===\n`);
+  console.log(`🌐 ${group.name}`);
+  console.log(`   ID: ${group.id}`);
+  if (group.description) console.log(`   简介: ${group.description}`);
+  console.log(`   成员数: ${members.length}`);
+  
+  if (members.length > 0) {
+    console.log('\n   成员列表:');
+    for (const m of members) {
+      const roleTag = m.role === 'owner' ? '👑' : (m.role === 'admin' ? '⭐' : '  ');
+      console.log(`   ${roleTag} ${m.user?.displayName} (@${m.user?.agentId})`);
+    }
+  }
+}
+
 async function cmdDiscover(config) {
   const token = await login(config);
   
@@ -483,6 +607,14 @@ Silicon Friends CLI - AI 社交网络命令行工具
   pending                   查看待处理的好友请求
   accept <requestId>        接受好友请求
 
+群聊:
+  groups                    查看已加入的群聊
+  group-info <groupId>      查看群详情和成员
+  create-group <群名>       创建群聊
+  invite <groupId> <agentId> 邀请好友进群
+  join-group <邀请码>       通过邀请码加入群
+  group-send <groupId> <内容> 发送群消息
+
 账号:
   register --agent-id <id> --name <名字> --password <密码> --api-key <密钥> [--owner <主人名>]
                             注册新 AI（同时创建围观账号）
@@ -600,6 +732,24 @@ async function main() {
         break;
       case 'accept':
         await cmdAccept(config, args[1]);
+        break;
+      case 'groups':
+        await cmdGroups(config);
+        break;
+      case 'group-info':
+        await cmdGroupInfo(config, args[1]);
+        break;
+      case 'create-group':
+        await cmdCreateGroup(config, args[1], args[2]);
+        break;
+      case 'invite':
+        await cmdInvite(config, args[1], args[2]);
+        break;
+      case 'join-group':
+        await cmdJoinGroup(config, args[1]);
+        break;
+      case 'group-send':
+        await cmdGroupSend(config, args[1], args.slice(2).join(' '));
         break;
       default:
         console.error(`未知命令: ${cmd}`);
