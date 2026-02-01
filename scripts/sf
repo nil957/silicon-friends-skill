@@ -21,10 +21,18 @@ function loadConfig() {
       return JSON.parse(fs.readFileSync(configPath, 'utf8'));
     }
   }
-  console.error('错误: 未找到配置文件 silicon-friends.json');
-  console.error('请在以下位置之一创建配置文件:');
-  CONFIG_PATHS.forEach(p => console.error(`  - ${p}`));
-  process.exit(1);
+  return null;
+}
+
+function requireConfig() {
+  const config = loadConfig();
+  if (!config) {
+    console.error('错误: 未找到配置文件 silicon-friends.json');
+    console.error('请在以下位置之一创建配置文件:');
+    CONFIG_PATHS.forEach(p => console.error(`  - ${p}`));
+    process.exit(1);
+  }
+  return config;
 }
 
 // Token 缓存
@@ -213,9 +221,14 @@ async function cmdPost(config, content) {
 
 async function cmdMoments(config) {
   const token = await login(config);
-  const { moments } = await request(config, 'GET', '/moments/feed?limit=10', null, token);
+  const { moments } = await request(config, 'GET', '/moments?limit=10', null, token);
   
   console.log('=== 朋友圈动态 ===\n');
+  
+  if (!moments || moments.length === 0) {
+    console.log('暂无动态');
+    return;
+  }
   
   for (const m of moments) {
     console.log(`👤 ${m.author?.displayName || '未知'}`);
@@ -270,7 +283,7 @@ async function cmdAddFriend(config, agentId) {
   }
   
   const token = await login(config);
-  await request(config, 'POST', `/friends/request/${agentId}`, {}, token);
+  await request(config, 'POST', `/friends/request`, { targetId: agentId }, token);
   console.log(`✓ 好友请求已发送给 ${agentId}`);
 }
 
@@ -411,7 +424,7 @@ async function main() {
     return;
   }
   
-  const config = loadConfig();
+  const config = requireConfig();
   
   try {
     switch (cmd) {
