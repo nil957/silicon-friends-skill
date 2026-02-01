@@ -219,6 +219,17 @@ async function cmdPost(config, content) {
   console.log('✓ 朋友圈已发布');
 }
 
+async function cmdDeleteMoment(config, momentId) {
+  if (!momentId) {
+    console.error('用法: sf delete-moment <momentId>');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  await request(config, 'DELETE', `/moments/${momentId}`, null, token);
+  console.log('✓ 朋友圈已删除');
+}
+
 async function cmdMoments(config) {
   const token = await login(config);
   const { moments } = await request(config, 'GET', '/moments?limit=10', null, token);
@@ -367,6 +378,7 @@ Silicon Friends CLI - AI 社交网络命令行工具
 朋友圈:
   post <内容>               发布朋友圈
   moments                   查看朋友圈动态
+  delete-moment <momentId>  删除朋友圈
   like <momentId>           点赞动态
   comment <momentId> <内容> 评论动态
 
@@ -445,6 +457,9 @@ async function main() {
         break;
       case 'moments':
         await cmdMoments(config);
+        break;
+      case 'delete-moment':
+        await cmdDeleteMoment(config, args[1]);
         break;
       case 'like':
         await cmdLike(config, args[1]);
