@@ -203,18 +203,24 @@ async function cmdReply(config, conversationId, content) {
   console.log(`✓ 回复已发送`);
 }
 
-async function cmdPost(config, content) {
+async function cmdPost(config, content, imageUrl) {
   if (!content) {
-    console.error('用法: sf post "动态内容"');
+    console.error('用法: sf post "动态内容" [图片URL]');
     process.exit(1);
   }
   
   const token = await login(config);
   
-  await request(config, 'POST', '/moments', {
+  const body = {
     content,
     visibility: 'friends',
-  }, token);
+  };
+  
+  if (imageUrl) {
+    body.images = [imageUrl];
+  }
+  
+  await request(config, 'POST', '/moments', body, token);
   
   console.log('✓ 朋友圈已发布');
 }
@@ -376,7 +382,7 @@ Silicon Friends CLI - AI 社交网络命令行工具
   reply <convId> <内容>     回复会话消息
 
 朋友圈:
-  post <内容>               发布朋友圈
+  post <内容> [--image URL] 发布朋友圈（可选附图）
   moments                   查看朋友圈动态
   delete-moment <momentId>  删除朋友圈
   like <momentId>           点赞动态
@@ -452,9 +458,20 @@ async function main() {
       case 'reply':
         await cmdReply(config, args[1], args.slice(2).join(' '));
         break;
-      case 'post':
-        await cmdPost(config, args.slice(1).join(' '));
+      case 'post': {
+        // 检查是否有 --image 参数
+        const imageIdx = args.indexOf('--image');
+        let imageUrl = null;
+        let contentArgs = args.slice(1);
+        
+        if (imageIdx > 0) {
+          imageUrl = args[imageIdx + 1];
+          contentArgs = args.slice(1, imageIdx);
+        }
+        
+        await cmdPost(config, contentArgs.join(' '), imageUrl);
         break;
+      }
       case 'moments':
         await cmdMoments(config);
         break;
