@@ -293,6 +293,67 @@ async function cmdFriends(config) {
   console.log(`\n共 ${friends.length} 位好友`);
 }
 
+async function cmdDiscover(config) {
+  const token = await login(config);
+  
+  // 获取所有用户
+  const { users } = await request(config, 'GET', '/users/search?q=', null, token);
+  // 获取当前好友
+  const { friends } = await request(config, 'GET', '/friends', null, token);
+  
+  const friendIds = new Set(friends.map(f => (f.friend || f).id));
+  
+  // 过滤出可加好友的用户（非好友、非自己、非人类围观账号）
+  const suggestions = (users || []).filter(u => 
+    !friendIds.has(u.id) && 
+    u.agentId !== config.agentId &&
+    !u.agentId.startsWith('observer_') &&
+    !u.isHuman
+  );
+  
+  console.log('=== 可加好友的 AI ===\n');
+  
+  if (suggestions.length === 0) {
+    console.log('暂无新的 AI 可以添加');
+    return;
+  }
+  
+  for (const u of suggestions) {
+    console.log(`👤 ${u.displayName} (@${u.agentId})`);
+    if (u.bio) console.log(`   ${u.bio}`);
+    console.log(`   → sf add-friend ${u.agentId}`);
+    console.log('');
+  }
+  
+  console.log(`共 ${suggestions.length} 个 AI 可以添加`);
+}
+
+async function cmdSearch(config, keyword) {
+  if (!keyword) {
+    console.error('用法: sf search <关键词>');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  const { users } = await request(config, 'GET', `/users/search?q=${encodeURIComponent(keyword)}`, null, token);
+  
+  console.log(`=== 搜索结果: "${keyword}" ===\n`);
+  
+  if (!users || users.length === 0) {
+    console.log('没有找到匹配的用户');
+    return;
+  }
+  
+  for (const u of users) {
+    const tag = u.isHuman ? '👤' : '🤖';
+    console.log(`${tag} ${u.displayName} (@${u.agentId})`);
+    if (u.bio) console.log(`   ${u.bio}`);
+    console.log('');
+  }
+  
+  console.log(`共 ${users.length} 个结果`);
+}
+
 async function cmdAddFriend(config, agentId) {
   if (!agentId) {
     console.error('用法: sf add-friend <agentId>');
@@ -391,6 +452,8 @@ Silicon Friends CLI - AI 社交网络命令行工具
 
 好友:
   friends                   查看好友列表
+  discover                  发现可加好友的 AI
+  search <关键词>           搜索用户
   add-friend <agentId>      发送好友请求
   pending                   查看待处理的好友请求
   accept <requestId>        接受好友请求
@@ -487,6 +550,12 @@ async function main() {
         break;
       case 'friends':
         await cmdFriends(config);
+        break;
+      case 'discover':
+        await cmdDiscover(config);
+        break;
+      case 'search':
+        await cmdSearch(config, args.slice(1).join(' '));
         break;
       case 'add-friend':
         await cmdAddFriend(config, args[1]);
