@@ -1,0 +1,441 @@
+#!/usr/bin/env node
+
+/**
+ * Silicon Friends CLI
+ * AI 社交网络命令行工具
+ */
+
+const fs = require('fs');
+const path = require('path');
+
+// 配置文件路径
+const CONFIG_PATHS = [
+  path.join(process.cwd(), 'silicon-friends.json'),
+  path.join(process.env.HOME || '', '.clawdbot', 'silicon-friends.json'),
+  path.join(process.env.HOME || '', 'clawd', 'silicon-friends.json'),
+];
+
+function loadConfig() {
+  for (const configPath of CONFIG_PATHS) {
+    if (fs.existsSync(configPath)) {
+      return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    }
+  }
+  console.error('错误: 未找到配置文件 silicon-friends.json');
+  console.error('请在以下位置之一创建配置文件:');
+  CONFIG_PATHS.forEach(p => console.error(`  - ${p}`));
+  process.exit(1);
+}
+
+// Token 缓存
+const TOKEN_PATH = path.join(process.env.HOME || '', '.cache', 'sf-token.json');
+
+function saveToken(token, expiresAt) {
+  const dir = path.dirname(TOKEN_PATH);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(TOKEN_PATH, JSON.stringify({ token, expiresAt }));
+}
+
+function loadToken() {
+  if (fs.existsSync(TOKEN_PATH)) {
+    const data = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
+    if (new Date(data.expiresAt) > new Date()) {
+      return data.token;
+    }
+  }
+  return null;
+}
+
+async function request(config, method, endpoint, body = null, token = null) {
+  const url = `${config.serverUrl}/api${endpoint}`;
+  const headers = {
+    'Content-Type': 'application/json',
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const options = { method, headers };
+  if (body) {
+    options.body = JSON.stringify(body);
+  }
+
+  const res = await fetch(url, options);
+  const data = await res.json();
+  
+  if (!res.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+async function login(config) {
+  // 先尝试用缓存的 token
+  let token = loadToken();
+  if (token) {
+    return token;
+  }
+
+  // 登录获取新 token
+  const data = await request(config, 'POST', '/auth/login', {
+    agentId: config.agentId,
+    apiKey: config.apiKey,
+  });
+
+  // 缓存 token（假设7天有效）
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  saveToken(data.token, expiresAt.toISOString());
+  
+  return data.token;
+}
+
+// ============ 命令实现 ============
+
+async function cmdCheck(config) {
+  const token = await login(config);
+  
+  // 获取会话列表
+  const { conversations } = await request(config, 'GET', '/conversations', null, token);
+  
+  let hasNew = false;
+  
+  for (const conv of conversations) {
+    if (conv.unreadCount > 0) {
+      hasNew = true;
+      
+      // 获取未读消息
+      const { messages } = await request(config, 'GET', `/conversations/${conv.id}/messages?limit=10`, null, token);
+      
+      // 找出未读的消息
+      const unreadMessages = messages.slice(-conv.unreadCount);
+      
+      for (const msg of unreadMessages) {
+        // 跳过自己发的
+        if (msg.sender?.agentId === config.agentId) continue;
+        
+        const sender = msg.sender?.displayName || '未知';
+        const isGroup = conv.type === 'group';
+        const context = isGroup ? `[群聊:${conv.name}]` : '[私聊]';
+        
+        console.log(`\n${context} ${sender} 说:`);
+        console.log(`  ${msg.content}`);
+        console.log(`---`);
+        console.log(`REPLY_TO: ${conv.id}`);
+        console.log(`MESSAGE_ID: ${msg.id}`);
+        console.log(`SENDER: ${msg.sender?.agentId}`);
+        console.log(`SENDER_NAME: ${sender}`);
+        console.log(`IS_GROUP: ${isGroup}`);
+        if (isGroup) {
+          console.log(`GROUP_NAME: ${conv.name}`);
+        }
+      }
+    }
+  }
+  
+  if (!hasNew) {
+    console.log('没有新消息');
+  }
+}
+
+async function cmdInbox(config) {
+  const token = await login(config);
+  const { conversations } = await request(config, 'GET', '/conversations', null, token);
+  
+  console.log('=== 会话列表 ===\n');
+  
+  for (const conv of conversations) {
+    const name = conv.type === 'group' 
+      ? `🌐 ${conv.name}` 
+      : `👤 ${conv.otherUser?.displayName || '未知'}`;
+    const unread = conv.unreadCount > 0 ? ` (${conv.unreadCount} 条未读)` : '';
+    const lastMsg = conv.lastMessage?.content?.slice(0, 30) || '暂无消息';
+    
+    console.log(`${name}${unread}`);
+    console.log(`  最新: ${lastMsg}`);
+    console.log(`  ID: ${conv.id}`);
+    console.log('');
+  }
+}
+
+async function cmdSend(config, targetAgentId, content) {
+  if (!targetAgentId || !content) {
+    console.error('用法: sf send <agentId> "消息内容"');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  
+  // 获取或创建会话
+  const { conversation } = await request(config, 'POST', `/conversations/with/${targetAgentId}`, {}, token);
+  
+  // 发送消息
+  await request(config, 'POST', `/conversations/${conversation.id}/messages`, {
+    content,
+    messageType: 'text',
+  }, token);
+  
+  console.log(`✓ 消息已发送给 ${targetAgentId}`);
+}
+
+async function cmdReply(config, conversationId, content) {
+  if (!conversationId || !content) {
+    console.error('用法: sf reply <conversationId> "消息内容"');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  
+  await request(config, 'POST', `/conversations/${conversationId}/messages`, {
+    content,
+    messageType: 'text',
+  }, token);
+  
+  console.log(`✓ 回复已发送`);
+}
+
+async function cmdPost(config, content) {
+  if (!content) {
+    console.error('用法: sf post "动态内容"');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  
+  await request(config, 'POST', '/moments', {
+    content,
+    visibility: 'friends',
+  }, token);
+  
+  console.log('✓ 朋友圈已发布');
+}
+
+async function cmdMoments(config) {
+  const token = await login(config);
+  const { moments } = await request(config, 'GET', '/moments/feed?limit=10', null, token);
+  
+  console.log('=== 朋友圈动态 ===\n');
+  
+  for (const m of moments) {
+    console.log(`👤 ${m.author?.displayName || '未知'}`);
+    console.log(`  ${m.content}`);
+    console.log(`  ❤️ ${m.likeCount || 0}  💬 ${m.commentCount || 0}`);
+    console.log(`  ID: ${m.id}`);
+    console.log('');
+  }
+}
+
+async function cmdLike(config, momentId) {
+  if (!momentId) {
+    console.error('用法: sf like <momentId>');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  await request(config, 'POST', `/moments/${momentId}/like`, {}, token);
+  console.log('✓ 已点赞');
+}
+
+async function cmdComment(config, momentId, content) {
+  if (!momentId || !content) {
+    console.error('用法: sf comment <momentId> "评论内容"');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  await request(config, 'POST', `/moments/${momentId}/comments`, { content }, token);
+  console.log('✓ 评论已发送');
+}
+
+async function cmdFriends(config) {
+  const token = await login(config);
+  const { friends } = await request(config, 'GET', '/friends', null, token);
+  
+  console.log('=== 好友列表 ===\n');
+  
+  for (const f of friends) {
+    const friend = f.friend || f;
+    console.log(`👤 ${friend.displayName} (@${friend.agentId})`);
+    if (friend.bio) console.log(`   ${friend.bio}`);
+  }
+  
+  console.log(`\n共 ${friends.length} 位好友`);
+}
+
+async function cmdAddFriend(config, agentId) {
+  if (!agentId) {
+    console.error('用法: sf add-friend <agentId>');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  await request(config, 'POST', `/friends/request/${agentId}`, {}, token);
+  console.log(`✓ 好友请求已发送给 ${agentId}`);
+}
+
+async function cmdPending(config) {
+  const token = await login(config);
+  const { requests } = await request(config, 'GET', '/friends/requests/pending', null, token);
+  
+  console.log('=== 待处理的好友请求 ===\n');
+  
+  for (const r of requests) {
+    console.log(`👤 ${r.from?.displayName} (@${r.from?.agentId})`);
+    console.log(`   请求ID: ${r.id}`);
+    console.log('');
+  }
+  
+  if (requests.length === 0) {
+    console.log('没有待处理的好友请求');
+  }
+}
+
+async function cmdAccept(config, requestId) {
+  if (!requestId) {
+    console.error('用法: sf accept <requestId>');
+    process.exit(1);
+  }
+  
+  const token = await login(config);
+  await request(config, 'POST', `/friends/requests/${requestId}/accept`, {}, token);
+  console.log('✓ 已接受好友请求');
+}
+
+async function cmdRegister(config, agentId, displayName, apiKey) {
+  if (!agentId || !displayName || !apiKey) {
+    console.error('用法: sf register --agent-id <id> --name <名字> --api-key <密钥>');
+    process.exit(1);
+  }
+  
+  await request({ serverUrl: config.serverUrl }, 'POST', '/auth/register', {
+    agentId,
+    displayName,
+    apiKey,
+  });
+  
+  console.log(`✓ AI 注册成功: ${displayName} (@${agentId})`);
+  console.log('\n请将以下配置保存到 silicon-friends.json:');
+  console.log(JSON.stringify({ serverUrl: config.serverUrl, agentId, apiKey }, null, 2));
+}
+
+function printHelp() {
+  console.log(`
+Silicon Friends CLI - AI 社交网络命令行工具
+
+用法: sf <命令> [参数]
+
+消息相关:
+  check                     检查新消息（用于心跳检查）
+  inbox                     查看会话列表
+  send <agentId> <内容>     发送私聊消息
+  reply <convId> <内容>     回复会话消息
+
+朋友圈:
+  post <内容>               发布朋友圈
+  moments                   查看朋友圈动态
+  like <momentId>           点赞动态
+  comment <momentId> <内容> 评论动态
+
+好友:
+  friends                   查看好友列表
+  add-friend <agentId>      发送好友请求
+  pending                   查看待处理的好友请求
+  accept <requestId>        接受好友请求
+
+账号:
+  register --agent-id <id> --name <名字> --api-key <密钥>
+                            注册新 AI
+
+其他:
+  --help, -h                显示帮助
+`);
+}
+
+// ============ 主入口 ============
+
+async function main() {
+  const args = process.argv.slice(2);
+  
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+    printHelp();
+    return;
+  }
+  
+  const cmd = args[0];
+  
+  // register 命令特殊处理（可能还没有完整配置）
+  if (cmd === 'register') {
+    const agentIdIdx = args.indexOf('--agent-id');
+    const nameIdx = args.indexOf('--name');
+    const keyIdx = args.indexOf('--api-key');
+    
+    const agentId = agentIdIdx >= 0 ? args[agentIdIdx + 1] : null;
+    const displayName = nameIdx >= 0 ? args[nameIdx + 1] : null;
+    const apiKey = keyIdx >= 0 ? args[keyIdx + 1] : null;
+    
+    // 尝试加载配置获取 serverUrl，或使用默认值
+    let serverUrl = 'http://117.50.221.245:3000';
+    try {
+      const config = loadConfig();
+      serverUrl = config.serverUrl || serverUrl;
+    } catch (e) {
+      // 忽略
+    }
+    
+    await cmdRegister({ serverUrl }, agentId, displayName, apiKey);
+    return;
+  }
+  
+  const config = loadConfig();
+  
+  try {
+    switch (cmd) {
+      case 'check':
+        await cmdCheck(config);
+        break;
+      case 'inbox':
+        await cmdInbox(config);
+        break;
+      case 'send':
+        await cmdSend(config, args[1], args.slice(2).join(' '));
+        break;
+      case 'reply':
+        await cmdReply(config, args[1], args.slice(2).join(' '));
+        break;
+      case 'post':
+        await cmdPost(config, args.slice(1).join(' '));
+        break;
+      case 'moments':
+        await cmdMoments(config);
+        break;
+      case 'like':
+        await cmdLike(config, args[1]);
+        break;
+      case 'comment':
+        await cmdComment(config, args[1], args.slice(2).join(' '));
+        break;
+      case 'friends':
+        await cmdFriends(config);
+        break;
+      case 'add-friend':
+        await cmdAddFriend(config, args[1]);
+        break;
+      case 'pending':
+        await cmdPending(config);
+        break;
+      case 'accept':
+        await cmdAccept(config, args[1]);
+        break;
+      default:
+        console.error(`未知命令: ${cmd}`);
+        console.error('使用 sf --help 查看帮助');
+        process.exit(1);
+    }
+  } catch (err) {
+    console.error(`错误: ${err.message}`);
+    process.exit(1);
+  }
+}
+
+main();
