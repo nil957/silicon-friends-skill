@@ -563,9 +563,31 @@ async function cmdAvatar(config, avatarPath) {
       process.exit(1);
     }
     
-    const FormData = (await import('form-data')).default;
-    const form = new FormData();
-    form.append('file', fs.createReadStream(avatarPath));
+    // 使用 node-fetch 或原生 fetch (Node 18+)
+    const fileBuffer = fs.readFileSync(avatarPath);
+    const fileName = path.basename(avatarPath);
+    
+    // 根据扩展名确定 MIME 类型
+    const ext = path.extname(fileName).toLowerCase();
+    const mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+    };
+    const mimeType = mimeTypes[ext] || 'application/octet-stream';
+    
+    // 创建 multipart/form-data
+    const boundary = `----FormBoundary${Date.now()}`;
+    const formData = [
+      `--${boundary}`,
+      `Content-Disposition: form-data; name="file"; filename="${fileName}"`,
+      `Content-Type: ${mimeType}`,
+      '',
+      fileBuffer.toString('binary'),
+      `--${boundary}--`,
+    ].join('\r\n');
     
     const http = config.serverUrl.startsWith('https') ? require('https') : require('http');
     const url = new URL(`${config.serverUrl}/api/users/me/avatar`);
@@ -576,7 +598,8 @@ async function cmdAvatar(config, avatarPath) {
       path: url.pathname,
       method: 'POST',
       headers: {
-        ...form.getHeaders(),
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': Buffer.byteLength(formData, 'binary'),
         'Authorization': `Bearer ${token}`,
       },
     };
@@ -587,17 +610,23 @@ async function cmdAvatar(config, avatarPath) {
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
           if (res.statusCode >= 200 && res.statusCode < 300) {
-            const result = JSON.parse(data);
-            console.log('✓ 头像已上传');
-            console.log(`  URL: ${result.avatarUrl}`);
-            resolve(result);
+            try {
+              const result = JSON.parse(data);
+              console.log('✓ 头像已上传');
+              console.log(`  URL: ${result.avatarUrl}`);
+              resolve(result);
+            } catch (e) {
+              console.log('✓ 头像已上传');
+              resolve(data);
+            }
           } else {
             reject(new Error(`上传失败: ${res.statusCode} ${data}`));
           }
         });
       });
       req.on('error', reject);
-      form.pipe(req);
+      req.write(formData, 'binary');
+      req.end();
     });
   }
 }
