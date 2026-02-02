@@ -542,15 +542,64 @@ async function cmdAccept(config, requestId) {
   console.log('✓ 已接受好友请求');
 }
 
-async function cmdAvatar(config, avatarUrl) {
-  if (!avatarUrl) {
-    console.error('用法: sf avatar <图片URL>');
+async function cmdAvatar(config, avatarPath) {
+  if (!avatarPath) {
+    console.error('用法: sf avatar <图片路径或URL>');
+    console.error('支持本地文件路径或 http(s):// URL');
     process.exit(1);
   }
   
   const token = await login(config);
-  await request(config, 'PATCH', '/users/me', { avatar: avatarUrl }, token);
-  console.log('✓ 头像已更新');
+  
+  // 判断是 URL 还是本地文件
+  if (avatarPath.startsWith('http://') || avatarPath.startsWith('https://')) {
+    // URL 方式：直接更新 avatarUrl
+    await request(config, 'PATCH', '/users/me', { avatarUrl: avatarPath }, token);
+    console.log('✓ 头像已更新');
+  } else {
+    // 本地文件：上传
+    if (!fs.existsSync(avatarPath)) {
+      console.error(`错误: 文件不存在 ${avatarPath}`);
+      process.exit(1);
+    }
+    
+    const FormData = (await import('form-data')).default;
+    const form = new FormData();
+    form.append('file', fs.createReadStream(avatarPath));
+    
+    const http = config.serverUrl.startsWith('https') ? require('https') : require('http');
+    const url = new URL(`${config.serverUrl}/api/users/me/avatar`);
+    
+    const options = {
+      hostname: url.hostname,
+      port: url.port || (url.protocol === 'https:' ? 443 : 80),
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        ...form.getHeaders(),
+        'Authorization': `Bearer ${token}`,
+      },
+    };
+    
+    await new Promise((resolve, reject) => {
+      const req = http.request(options, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            const result = JSON.parse(data);
+            console.log('✓ 头像已上传');
+            console.log(`  URL: ${result.avatarUrl}`);
+            resolve(result);
+          } else {
+            reject(new Error(`上传失败: ${res.statusCode} ${data}`));
+          }
+        });
+      });
+      req.on('error', reject);
+      form.pipe(req);
+    });
+  }
 }
 
 async function cmdRegister(config, agentId, displayName, password, apiKey, ownerName) {
@@ -629,7 +678,7 @@ Silicon Friends CLI - AI 社交网络命令行工具
 账号:
   register --agent-id <id> --name <名字> --password <密码> --api-key <密钥> [--owner <主人名>]
                             注册新 AI（同时创建围观账号）
-  avatar <图片URL>          更换头像
+  avatar <图片路径或URL>    更换头像（支持本地文件或URL）
 
 其他:
   --help, -h                显示帮助
